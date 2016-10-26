@@ -1,0 +1,91 @@
+module openflow-arp-proxy {
+    yang-version 1;
+    namespace "urn:snlab:openflow:arpproxy";
+    prefix "openflow-arp-proxy";
+
+    import config {
+        prefix config;
+        revision-date 2013-04-05;
+    }
+
+    import yang-ext {
+        prefix ext;
+        revision-date "2013-07-09";
+    }
+
+    import opendaylight-md-sal-binding {
+        prefix md-sal-binding;
+        revision-date 2013-10-28;
+    }
+
+    import ietf-yang-types {
+        prefix yang-type;
+        revision-date 2013-07-15;
+    }
+
+    import ietf-inet-types {
+        prefix inet-type;
+        revision-date 2013-07-15;
+    }
+
+    import network-topology {
+        prefix topology;
+        revision-date 2013-10-21;
+    }
+
+    description
+        "A proxy for ARP packets in an OpenFlow network";
+
+    revision "2016-10-01" {
+        description
+            "Initial revision";
+    }
+
+    list known-host {
+        key ip-address;
+
+        leaf ip-address {
+            type inet-type:ipv4-address;
+        }
+
+        leaf mac-address {
+            type yang-type:mac-address;
+        }
+
+        leaf last-appear {
+            type string;
+        }
+
+        leaf last-update {
+            type yang-type:timestamp;
+        }
+    }
+
+    identity openflow-arp-proxy {
+        base config:module-type;
+        config:java-name-prefix ArpProxy;
+    }
+
+    augment "/topology:network-topology/topology:topology/topology:node/topology:termination-point/" {
+        ext:augment-identifier "internal-property";
+
+        leaf internal {
+            type boolean;
+            default false;
+        }
+    }
+
+    augment "/config:modules/config:module/config:configuration" {
+        case openflow-arp-proxy {
+            when "/config:modules/config:module/config:type = 'openflow-arp-proxy'";
+            container broker {
+                uses config:service-ref {
+                    refine type {
+                        mandatory true;
+                        config:required-identity md-sal-binding:binding-broker-osgi-registry;
+                    }
+                }
+            }
+         }
+    }
+}

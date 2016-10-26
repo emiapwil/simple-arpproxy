@@ -1,4 +1,12 @@
+# temporary files
+*.swo
+*.swp
+*.log
+*~
+
+#
 *.class
+*.checkstyle
 
 # Mobile Tools for Java (J2ME)
 .mtj.tmp/
@@ -8,5 +16,26 @@
 *.war
 *.ear
 
+# Maven
+target
+
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
+
+# IDE related
+eclimd.log
+.project
+.classpath
+.metadata
+.idea
+*.iml
+*.ipr
+*.iws
+.zsh*
+xtend-gen
+
+# opendaylight
+yang-gen-*
+yang-gen-code
+yang-gen-config
+yang-gen-sal
