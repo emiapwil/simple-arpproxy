@@ -278,6 +278,9 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
                             return false;
                         }
                         node.getTerminationPoint().forEach((tp) -> {
+                            if (tp.getTpId().getValue().endsWith("LOCAL")) {
+                                return;
+                            }
                             InternalProperty itp = tp.getAugmentation(InternalProperty.class);
                             if ((itp == null) || (!itp.isInternal())) {
                                 forward(packet, tp.getTpId().getValue());
