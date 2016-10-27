@@ -66,12 +66,13 @@ module openflow-arp-proxy {
         config:java-name-prefix ArpProxy;
     }
 
-    augment "/topology:network-topology/topology:topology/topology:node/topology:termination-point/" {
-        ext:augment-identifier "internal-property";
+    container external-ports {
+        list external-port {
+            key port-id;
 
-        leaf internal {
-            type boolean;
-            default false;
+            leaf port-id {
+                type string;
+            }
         }
     }
 

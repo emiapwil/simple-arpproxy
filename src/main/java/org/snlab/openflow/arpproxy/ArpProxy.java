@@ -16,14 +16,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import org.opendaylight.controller.md.sal.binding.api.DataBroker;
-import org.opendaylight.controller.md.sal.binding.api.DataChangeListener;
 import org.opendaylight.controller.md.sal.binding.api.ReadTransaction;
 import org.opendaylight.controller.md.sal.binding.api.ReadWriteTransaction;
 import org.opendaylight.controller.md.sal.binding.api.WriteTransaction;
 import org.opendaylight.controller.md.sal.common.api.data.AsyncDataBroker.DataChangeScope;
-import org.opendaylight.controller.md.sal.common.api.data.AsyncDataChangeEvent;
 import org.opendaylight.controller.md.sal.common.api.data.LogicalDatastoreType;
-import org.opendaylight.controller.md.sal.common.api.data.TransactionCommitFailedException;
 import org.opendaylight.controller.sal.binding.api.NotificationService;
 import org.opendaylight.yang.gen.v1.urn.ietf.params.xml.ns.yang.ietf.inet.types.rev130715.Ipv4Address;
 import org.opendaylight.yang.gen.v1.urn.ietf.params.xml.ns.yang.ietf.yang.types.rev130715.MacAddress;
@@ -32,30 +29,22 @@ import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.node.No
 import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.service.rev130709.PacketProcessingListener;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.service.rev130709.PacketProcessingService;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.packet.service.rev130709.PacketReceived;
-import org.opendaylight.yang.gen.v1.urn.snlab.openflow.arpproxy.rev161001.InternalProperty;
-import org.opendaylight.yang.gen.v1.urn.snlab.openflow.arpproxy.rev161001.InternalPropertyBuilder;
+import org.opendaylight.yang.gen.v1.urn.snlab.openflow.arpproxy.rev161001.ExternalPorts;
 import org.opendaylight.yang.gen.v1.urn.snlab.openflow.arpproxy.rev161001.KnownHost;
 import org.opendaylight.yang.gen.v1.urn.snlab.openflow.arpproxy.rev161001.KnownHostBuilder;
 import org.opendaylight.yang.gen.v1.urn.snlab.openflow.arpproxy.rev161001.KnownHostKey;
+import org.opendaylight.yang.gen.v1.urn.snlab.openflow.arpproxy.rev161001.external.ports.ExternalPort;
+import org.opendaylight.yang.gen.v1.urn.snlab.openflow.arpproxy.rev161001.external.ports.ExternalPortKey;
 import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.NetworkTopology;
-import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.NodeId;
 import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.TopologyId;
-import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.TpId;
-import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.link.attributes.Destination;
-import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.link.attributes.Source;
 import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.Topology;
 import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.TopologyKey;
 import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.topology.Link;
 import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.topology.Node;
-import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.topology.NodeKey;
-import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.topology.node.TerminationPoint;
-import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.topology.node.TerminationPointKey;
 import org.opendaylight.yangtools.concepts.ListenerRegistration;
-import org.opendaylight.yangtools.yang.binding.DataObject;
 import org.opendaylight.yangtools.yang.binding.InstanceIdentifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.snlab.openflow.arpproxy.utils.RetryExecution;
 
 import com.google.common.base.Function;
 import com.google.common.base.Optional;
@@ -66,9 +55,11 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 
 @SuppressWarnings("deprecation")
-public class ArpProxy implements PacketProcessingListener, DataChangeListener, AutoCloseable {
+public class ArpProxy implements PacketProcessingListener, AutoCloseable {
 
-    private static final String OPENFLOW = "flow:1";
+    public static final LogicalDatastoreType OPERATIONAL = LogicalDatastoreType.OPERATIONAL;
+
+    public static final String OPENFLOW = "flow:1";
 
     private static final long GRACEFUL_PERIOD = 1000; // 10seconds = 1000 millisecond
 
@@ -86,6 +77,8 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
 
     private static final int OP_REPLY = 2;
 
+    private static final InstanceIdentifier<ExternalPorts> EXTERNAL_PORTS;
+
     private static final InstanceIdentifier<Topology> OPENFLOW_TOPOLOGY;
 
     static {
@@ -94,11 +87,13 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
         OPENFLOW_TOPOLOGY = InstanceIdentifier.builder(NetworkTopology.class)
                                               .child(Topology.class, key)
                                               .build();
+
+        EXTERNAL_PORTS = InstanceIdentifier.builder(ExternalPorts.class)
+                                           .build();
+
     }
 
     private static final Logger LOG = LoggerFactory.getLogger(ArpProxy.class);
-
-    private static final int RETRY_NUMBER = 5;
 
     private static final int MAC_LEN = 6;
 
@@ -108,39 +103,26 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
 
     private ArpTransmitter transmitter;
 
+    private TopologyMonitor monitor;
+
     private List<ListenerRegistration<?>> reg = Lists.newLinkedList();
 
     public void setup(DataBroker broker, NotificationService notifications,
                       PacketProcessingService packetProcessor) {
         this.broker = broker;
         this.transmitter = new ArpTransmitter(packetProcessor);
+        this.monitor = new TopologyMonitor(broker);
 
-        InstanceIdentifier<Link> iid = OPENFLOW_TOPOLOGY.child(Link.class);
+        InstanceIdentifier<Link> liid = OPENFLOW_TOPOLOGY.child(Link.class);
 
-        reg.add(broker.registerDataChangeListener(LogicalDatastoreType.OPERATIONAL, iid,
-                                                  this, DataChangeScope.ONE));
+        reg.add(broker.registerDataChangeListener(OPERATIONAL, liid,
+                                                  monitor, DataChangeScope.ONE));
+
+        InstanceIdentifier<Node> niid = OPENFLOW_TOPOLOGY.child(Node.class);
+        reg.add(broker.registerDataChangeListener(OPERATIONAL, niid,
+                                                  monitor, DataChangeScope.ONE));
 
         reg.add(notifications.registerNotificationListener(this));
-    }
-
-    private InstanceIdentifier<InternalProperty> createId(NodeId nid, TpId tid) {
-        NodeKey nodeKey = new NodeKey(nid);
-        TerminationPointKey tpKey = new TerminationPointKey(tid);
-        return OPENFLOW_TOPOLOGY.child(Node.class, nodeKey)
-                                .child(TerminationPoint.class, tpKey)
-                                .augmentation(InternalProperty.class);
-    }
-
-    private void updateTerminationPoint(WriteTransaction tx, NodeId node, TpId tp, boolean internal) {
-        if ((node == null) || (tp == null)) {
-            return;
-        }
-        InstanceIdentifier<InternalProperty> iid = createId(node, tp);
-
-        InternalProperty property = new InternalPropertyBuilder().setInternal(internal)
-                                                                 .build();
-
-        tx.put(LogicalDatastoreType.OPERATIONAL, iid, property, false);
     }
 
     private boolean quickCheckNotArp(PacketReceived packet) {
@@ -170,24 +152,16 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
         byte[] srcIp = new byte[IPV4_LEN], dstIp = new byte[IPV4_LEN];
     }
 
-    private static interface OptionalFunc<I, O> extends Function<Optional<I>, O> {
-    }
-
     private ListenableFuture<Boolean> fromNeighbor(ReadTransaction tx, PacketReceived packet) {
         InstanceIdentifier<?> ingress = packet.getIngress().getValue();
         String tid = ingress.firstKeyOf(NodeConnector.class).getId().getValue();
 
-        TpId tpId = new TpId(tid);
-        NodeId node = new NodeId(tpId);
+        ExternalPortKey key = new ExternalPortKey(tid);
+        InstanceIdentifier<ExternalPort> iid = EXTERNAL_PORTS.child(ExternalPort.class, key);
 
-        LOG.info("Reading internal property for node: {}", node);
-
-        ListenableFuture<Optional<InternalProperty>> future;
-        future = tx.read(LogicalDatastoreType.OPERATIONAL, createId(node, tpId));
-        return Futures.transform(future, new OptionalFunc<InternalProperty, Boolean>() {
-            public Boolean apply(Optional<InternalProperty> optional) {
-                LOG.info("Property: {}", optional);
-                return (optional.isPresent() && optional.get().isInternal());
+        return Futures.transform(tx.read(OPERATIONAL, iid), new Function<Optional<?>, Boolean>() {
+            public Boolean apply(Optional<?> optional) {
+                return optional.isPresent();
             }
         });
     }
@@ -205,14 +179,8 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
 
     private static void updateKnownHost(WriteTransaction tx, Ipv4Address ip, MacAddress mac,
                                         String lastAppear, long timestamp) {
-        LOG.info("here: before creating host");
-        try {
-            KnownHost host = createHost(ip, mac, lastAppear, timestamp);
-            LOG.info("here: after creating host");
-            updateKnownHost(tx, host);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        KnownHost host = createHost(ip, mac, lastAppear, timestamp);
+        updateKnownHost(tx, host);
     }
 
     private static void updateKnownHost(WriteTransaction tx, KnownHost host) {
@@ -252,38 +220,20 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
     private void flood(PacketReceived packet) {
         ReadTransaction tx = broker.newReadOnlyTransaction();
 
-        ListenableFuture<Optional<Topology>> future;
-        future = tx.read(LogicalDatastoreType.OPERATIONAL, OPENFLOW_TOPOLOGY);
-        Futures.transform(future, new OptionalFunc<Topology, Boolean>() {
-            public Boolean apply(Optional<Topology> optional) {
+        Futures.transform(tx.read(OPERATIONAL, EXTERNAL_PORTS), new Function<Optional<ExternalPorts>, Boolean>() {
+            public Boolean apply(Optional<ExternalPorts> optional) {
                 if (!optional.isPresent()) {
-                    LOG.info("Fail to read the topology");
-                    return false;
-                }
-                Topology topology = optional.get();
-                if (topology.getNode() == null) {
-                    LOG.info("Fail to read the node");
                     return false;
                 }
 
-                topology.getNode().forEach((node) -> {
-                    CompletableFuture.supplyAsync(() -> {
-                        if (node.getTerminationPoint() == null) {
-                            LOG.info("Can't find the termination point for {}", node);
-                            return false;
-                        }
-                        node.getTerminationPoint().forEach((tp) -> {
-                            if (tp.getTpId().getValue().endsWith("LOCAL")) {
-                                return;
-                            }
-                            InternalProperty itp = tp.getAugmentation(InternalProperty.class);
-                            if ((itp == null) || (!itp.isInternal())) {
-                                forward(packet, tp.getTpId().getValue());
-                            }
-                        });
-                        return true;
-                    });
-                });
+                ExternalPorts ports = optional.get();
+
+                for (ExternalPort port: ports.getExternalPort()) {
+                    String portId = port.getPortId();
+                    if (portId.equals(getIngress(packet))) {
+                        forward(packet, portId);
+                    }
+                }
                 return true;
             }
         });
@@ -319,8 +269,6 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
                 rwtx.cancel();
                 return false;
             }
-
-            LOG.info("ARP packet from a potential host");
 
             learn(rwtx, packet, info);
             timestamps.put(ip, lastUpdate);
@@ -400,8 +348,6 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
     private void learn(WriteTransaction wtx, PacketReceived packet, ArpInfo info) {
         Ipv4Address ip = getIpv4Address(info.srcIp);
         MacAddress mac = getMacAddress(info.srcMac);
-        LOG.info("Learning address binding: {} - {}", ip, mac);
-
         String ingress = getIngress(packet);
         long now = System.currentTimeMillis();
 
@@ -494,76 +440,6 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
                 LOG.error("Error when closing registration: {}", e);
             }
         }
-    }
-
-    private boolean isOpenflowSwitch(NodeId node) {
-        String nodeId = node.getValue();
-        return (nodeId.startsWith("openflow"));
-    }
-
-    private void deleteLink(WriteTransaction tx, AsyncDataChangeEvent<InstanceIdentifier<?>, DataObject> event) {
-        for (InstanceIdentifier<?> iid: event.getRemovedPaths()) {
-            DataObject obj = event.getOriginalData().get(iid);
-
-            if (!(obj instanceof Link)) {
-                continue;
-            }
-
-            Link link = (Link) obj;
-            Source src = link.getSource();
-            Destination dst = link.getDestination();
-
-            if ((src == null) || (dst == null)) {
-                continue;
-            }
-
-            if (isOpenflowSwitch(src.getSourceNode())) {
-                updateTerminationPoint(tx, src.getSourceNode(), src.getSourceTp(), false);
-            }
-            if (isOpenflowSwitch(dst.getDestNode())) {
-                updateTerminationPoint(tx, dst.getDestNode(), dst.getDestTp(), false);
-            }
-        }
-    }
-
-    private void createLink(WriteTransaction tx, AsyncDataChangeEvent<InstanceIdentifier<?>, DataObject> event) {
-        for (DataObject obj: event.getCreatedData().values()) {
-            if (!(obj instanceof Link)) {
-                continue;
-            }
-
-            Link link = (Link) obj;
-
-            Source src = link.getSource();
-            Destination dst = link.getDestination();
-
-            if ((src == null) || (dst == null)) {
-                continue;
-            }
-
-            if (isOpenflowSwitch(src.getSourceNode()) && isOpenflowSwitch(dst.getDestNode())) {
-                updateTerminationPoint(tx, src.getSourceNode(), src.getSourceTp(), true);
-                updateTerminationPoint(tx, dst.getDestNode(), dst.getDestTp(), true);
-            }
-        }
-    }
-
-    @Override
-    public void onDataChanged(AsyncDataChangeEvent<InstanceIdentifier<?>, DataObject> event) {
-        CompletableFuture.supplyAsync(() -> {
-            return new RetryExecution(RETRY_NUMBER).execute(() -> {
-                WriteTransaction wtx = broker.newWriteOnlyTransaction();
-                try {
-
-                    deleteLink(wtx, event);
-                    createLink(wtx, event);
-
-                    wtx.submit();
-                } catch (Exception e) {
-                    wtx.cancel();
-                }
-            }, Arrays.asList(TransactionCommitFailedException.class));
-        });
     }
 
 }
