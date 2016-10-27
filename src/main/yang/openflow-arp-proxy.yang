@@ -44,6 +44,8 @@ module openflow-arp-proxy {
     list known-host {
         key ip-address;
 
+        config false;
+
         leaf ip-address {
             type inet-type:ipv4-address;
         }

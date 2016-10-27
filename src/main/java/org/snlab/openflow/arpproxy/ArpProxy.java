@@ -10,18 +10,15 @@ package org.snlab.openflow.arpproxy;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 import org.opendaylight.controller.md.sal.binding.api.DataBroker;
 import org.opendaylight.controller.md.sal.binding.api.ReadTransaction;
 import org.opendaylight.controller.md.sal.binding.api.ReadWriteTransaction;
 import org.opendaylight.controller.md.sal.binding.api.WriteTransaction;
-import org.opendaylight.controller.md.sal.common.api.data.AsyncDataBroker.DataChangeScope;
-import org.opendaylight.controller.md.sal.common.api.data.LogicalDatastoreType;
-import org.opendaylight.controller.sal.binding.api.NotificationService;
 import org.opendaylight.yang.gen.v1.urn.ietf.params.xml.ns.yang.ietf.inet.types.rev130715.Ipv4Address;
 import org.opendaylight.yang.gen.v1.urn.ietf.params.xml.ns.yang.ietf.yang.types.rev130715.MacAddress;
 import org.opendaylight.yang.gen.v1.urn.ietf.params.xml.ns.yang.ietf.yang.types.rev130715.Timestamp;
@@ -35,33 +32,20 @@ import org.opendaylight.yang.gen.v1.urn.snlab.openflow.arpproxy.rev161001.KnownH
 import org.opendaylight.yang.gen.v1.urn.snlab.openflow.arpproxy.rev161001.KnownHostKey;
 import org.opendaylight.yang.gen.v1.urn.snlab.openflow.arpproxy.rev161001.external.ports.ExternalPort;
 import org.opendaylight.yang.gen.v1.urn.snlab.openflow.arpproxy.rev161001.external.ports.ExternalPortKey;
-import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.NetworkTopology;
-import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.TopologyId;
-import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.Topology;
-import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.TopologyKey;
-import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.topology.Link;
-import org.opendaylight.yang.gen.v1.urn.tbd.params.xml.ns.yang.network.topology.rev131021.network.topology.topology.Node;
-import org.opendaylight.yangtools.concepts.ListenerRegistration;
 import org.opendaylight.yangtools.yang.binding.InstanceIdentifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Function;
 import com.google.common.base.Optional;
-import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.util.concurrent.AsyncFunction;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 
-@SuppressWarnings("deprecation")
-public class ArpProxy implements PacketProcessingListener, AutoCloseable {
+class ArpProxy extends AbstractArpProxyComponents implements PacketProcessingListener {
 
-    public static final LogicalDatastoreType OPERATIONAL = LogicalDatastoreType.OPERATIONAL;
-
-    public static final String OPENFLOW = "flow:1";
-
-    private static final long GRACEFUL_PERIOD = 1000; // 10seconds = 1000 millisecond
+    private static final long GRACEFUL_PERIOD = 10000; // 10seconds = 10000 millisecond
 
     private static final int ETHERNET = 0x0001;
 
@@ -77,22 +61,6 @@ public class ArpProxy implements PacketProcessingListener, AutoCloseable {
 
     private static final int OP_REPLY = 2;
 
-    private static final InstanceIdentifier<ExternalPorts> EXTERNAL_PORTS;
-
-    private static final InstanceIdentifier<Topology> OPENFLOW_TOPOLOGY;
-
-    static {
-        TopologyKey key = new TopologyKey(new TopologyId(OPENFLOW));
-
-        OPENFLOW_TOPOLOGY = InstanceIdentifier.builder(NetworkTopology.class)
-                                              .child(Topology.class, key)
-                                              .build();
-
-        EXTERNAL_PORTS = InstanceIdentifier.builder(ExternalPorts.class)
-                                           .build();
-
-    }
-
     private static final Logger LOG = LoggerFactory.getLogger(ArpProxy.class);
 
     private static final int MAC_LEN = 6;
@@ -103,26 +71,14 @@ public class ArpProxy implements PacketProcessingListener, AutoCloseable {
 
     private ArpTransmitter transmitter;
 
-    private TopologyMonitor monitor;
-
-    private List<ListenerRegistration<?>> reg = Lists.newLinkedList();
-
-    public void setup(DataBroker broker, NotificationService notifications,
-                      PacketProcessingService packetProcessor) {
+    public void setup(DataBroker broker, PacketProcessingService packetProcessor) {
         this.broker = broker;
         this.transmitter = new ArpTransmitter(packetProcessor);
-        this.monitor = new TopologyMonitor(broker);
 
-        InstanceIdentifier<Link> liid = OPENFLOW_TOPOLOGY.child(Link.class);
-
-        reg.add(broker.registerDataChangeListener(OPERATIONAL, liid,
-                                                  monitor, DataChangeScope.ONE));
-
-        InstanceIdentifier<Node> niid = OPENFLOW_TOPOLOGY.child(Node.class);
-        reg.add(broker.registerDataChangeListener(OPERATIONAL, niid,
-                                                  monitor, DataChangeScope.ONE));
-
-        reg.add(notifications.registerNotificationListener(this));
+        // Clean up external ports every time
+        WriteTransaction tx = broker.newWriteOnlyTransaction();
+        tx.delete(OPERATIONAL, EXTERNAL_PORTS);
+        tx.submit();
     }
 
     private boolean quickCheckNotArp(PacketReceived packet) {
@@ -152,9 +108,8 @@ public class ArpProxy implements PacketProcessingListener, AutoCloseable {
         byte[] srcIp = new byte[IPV4_LEN], dstIp = new byte[IPV4_LEN];
     }
 
-    private ListenableFuture<Boolean> fromNeighbor(ReadTransaction tx, PacketReceived packet) {
-        InstanceIdentifier<?> ingress = packet.getIngress().getValue();
-        String tid = ingress.firstKeyOf(NodeConnector.class).getId().getValue();
+    private ListenableFuture<Boolean> fromExternalPort(ReadTransaction tx, PacketReceived packet) {
+        String tid = getIngress(packet);
 
         ExternalPortKey key = new ExternalPortKey(tid);
         InstanceIdentifier<ExternalPort> iid = EXTERNAL_PORTS.child(ExternalPort.class, key);
@@ -192,7 +147,7 @@ public class ArpProxy implements PacketProcessingListener, AutoCloseable {
         InstanceIdentifier<KnownHost> iid = InstanceIdentifier.builder(KnownHost.class, key)
                                                               .build();
 
-        tx.put(LogicalDatastoreType.OPERATIONAL, iid, host);
+        tx.put(OPERATIONAL, iid, host);
     }
 
     private static ListenableFuture<KnownHost> isKnownHost(ReadTransaction tx, ArpInfo info) {
@@ -206,7 +161,7 @@ public class ArpProxy implements PacketProcessingListener, AutoCloseable {
         InstanceIdentifier<KnownHost> iid = InstanceIdentifier.builder(KnownHost.class, key)
                                                               .build();
         ListenableFuture<Optional<KnownHost>> future;
-        future = tx.read(LogicalDatastoreType.OPERATIONAL, iid);
+        future = tx.read(OPERATIONAL, iid);
         return Futures.transform(future, new AsyncFunction<Optional<KnownHost>, KnownHost>() {
             public ListenableFuture<KnownHost> apply(Optional<KnownHost> optional) {
                 if (optional.isPresent()) {
@@ -230,9 +185,7 @@ public class ArpProxy implements PacketProcessingListener, AutoCloseable {
 
                 for (ExternalPort port: ports.getExternalPort()) {
                     String portId = port.getPortId();
-                    if (portId.equals(getIngress(packet))) {
-                        forward(packet, portId);
-                    }
+                    forward(packet, portId);
                 }
                 return true;
             }
@@ -241,6 +194,10 @@ public class ArpProxy implements PacketProcessingListener, AutoCloseable {
 
     private void forward(PacketReceived packet, String port) {
         LOG.info("Send packet to {}", port);
+
+        if (port.equals(getIngress(packet))) {
+            return;
+        }
         transmitter.transmit(packet, port);
     }
 
@@ -249,20 +206,23 @@ public class ArpProxy implements PacketProcessingListener, AutoCloseable {
                      .firstKeyOf(NodeConnector.class).getId().getValue();
     }
 
-    private Map<Ipv4Address, Long> timestamps = Maps.newConcurrentMap();
+    private Map<Ipv4Address, AtomicLong> timestamps = Maps.newConcurrentMap();
 
     private ListenableFuture<Boolean> checkAndLearn(PacketReceived packet, ArpInfo info) {
         Ipv4Address ip = getIpv4Address(info.srcIp);
-        long timestamp = System.currentTimeMillis();
-        long lastUpdate = timestamps.getOrDefault(ip, 0L);
+        long now = System.currentTimeMillis();
+        AtomicLong lastUpdate = timestamps.getOrDefault(ip, new AtomicLong(0L));
 
-        if (timestamp - lastUpdate < GRACEFUL_PERIOD * 10) {
+        long timestamp = lastUpdate.getAndAccumulate(now, (x, y) -> {
+            return y - x > GRACEFUL_PERIOD ? y : x;
+        });
+        if (now - timestamp < GRACEFUL_PERIOD) {
             return Futures.immediateFuture(true);
         }
 
         final ReadWriteTransaction rwtx = broker.newReadWriteTransaction();
-        return Futures.transform(fromNeighbor(rwtx, packet), (Boolean fromNeighbor) -> {
-            if (fromNeighbor) {
+        return Futures.transform(fromExternalPort(rwtx, packet), (Boolean external) -> {
+            if (!external) {
                 // Ignore ARP from internal links
                 LOG.error("Received ARP packets from a neighbor switch!");
 
@@ -281,13 +241,13 @@ public class ArpProxy implements PacketProcessingListener, AutoCloseable {
     private void request(PacketReceived packet, ArpInfo info) {
         // update known hosts
         ReadWriteTransaction rwtx = broker.newReadWriteTransaction();
-        long now = System.currentTimeMillis() / 10;
+        long now = System.currentTimeMillis();
 
         Futures.transform(isKnownHost(rwtx, info), new Function<KnownHost, Boolean>() {
             public Boolean apply(KnownHost host) {
                 boolean recent = false;
                 if (host != null) {
-                    recent = (now - host.getLastUpdate().getValue() > GRACEFUL_PERIOD);
+                    recent = (now - host.getLastUpdate().getValue() < GRACEFUL_PERIOD);
 
                     LOG.info("Host is recently updated: ", host.getLastUpdate());
 
@@ -428,18 +388,4 @@ public class ArpProxy implements PacketProcessingListener, AutoCloseable {
             return true;
         });
     }
-
-    @Override
-    public void close() throws Exception {
-        for (ListenerRegistration<?> registration: reg) {
-            try {
-                if (registration != null) {
-                    registration.close();
-                }
-            } catch (Exception e) {
-                LOG.error("Error when closing registration: {}", e);
-            }
-        }
-    }
-
 }
