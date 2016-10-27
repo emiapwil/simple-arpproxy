@@ -54,7 +54,6 @@ class ArpTransmitter {
     }
 
     private static TransmitPacketInput createPacketOut(PacketReceived packet, String port) {
-        NodeConnectorRef ingress = packet.getIngress();
         NodeConnectorRef egress = getNodeConnectorRef(port);
 
         NodeKey key = new NodeKey(new NodeId(getNodeId(port)));
@@ -64,7 +63,6 @@ class ArpTransmitter {
         return new TransmitPacketInputBuilder().setPayload(packet.getPayload())
                                                .setNode(ref)
                                                .setEgress(egress)
-                                               .setIngress(ingress)
                                                .build();
     }
 

@@ -68,8 +68,6 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
 
     private static final String OPENFLOW = "flow:1";
 
-    private static final String BROADCAST_MAC = "ff:ff:ff:ff:ff:ff";
-
     private static final long GRACEFUL_PERIOD = 1000; // 10seconds = 1000 millisecond
 
     private static final int ETHERNET = 0x0001;
@@ -249,11 +247,6 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
         });
     }
 
-    private static boolean isBroadcast(KnownHost host) {
-        String mac = host.getMacAddress().getValue();
-        return mac.equals(BROADCAST_MAC);
-    }
-
     private void flood(PacketReceived packet) {
         ReadTransaction tx = broker.newReadOnlyTransaction();
 
@@ -327,7 +320,7 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
     private void request(PacketReceived packet, ArpInfo info) {
         // update known hosts
         ReadWriteTransaction rwtx = broker.newReadWriteTransaction();
-        long now = System.currentTimeMillis();
+        long now = System.currentTimeMillis() / 10;
 
         Futures.transform(isKnownHost(rwtx, info), new Function<KnownHost, Boolean>() {
             public Boolean apply(KnownHost host) {
@@ -351,16 +344,14 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
                 }
                 // No retry, just get on all fours and pray for the best.
 
-                if (isBroadcast(host) && recent) {
-                    // ignore the request
-                    return false;
-                }
-
                 final String lastAppear = host.getLastAppear();
+                final boolean canFlood = !recent;
                 CompletableFuture.supplyAsync(() -> {
                     if (lastAppear == null) {
                         LOG.info("Flood the request");
-                        flood(packet);
+                        if (canFlood) {
+                            flood(packet);
+                        }
                     } else {
                         LOG.info("Forward the request");
                         forward(packet, lastAppear);

@@ -34,6 +34,9 @@ eclimd.log
 .zsh*
 xtend-gen
 
+# Editor
+.NERD*
+
 # opendaylight
 yang-gen-*
 yang-gen-code
