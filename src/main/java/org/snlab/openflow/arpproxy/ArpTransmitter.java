@@ -7,6 +7,8 @@
  */
 package org.snlab.openflow.arpproxy;
 
+import java.util.concurrent.CompletableFuture;
+
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.NodeConnectorId;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.NodeConnectorRef;
 import org.opendaylight.yang.gen.v1.urn.opendaylight.inventory.rev130819.NodeId;
@@ -67,7 +69,10 @@ class ArpTransmitter {
     }
 
     public void transmit(PacketReceived packet, String port) {
-        TransmitPacketInput out = createPacketOut(packet, port);
-        processor.transmitPacket(out);
+        CompletableFuture.supplyAsync(() -> {
+            TransmitPacketInput out = createPacketOut(packet, port);
+            processor.transmitPacket(out);
+            return true;
+        });
     }
 }

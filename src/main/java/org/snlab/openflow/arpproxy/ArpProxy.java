@@ -11,6 +11,7 @@ import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
@@ -59,6 +60,7 @@ import org.snlab.openflow.arpproxy.utils.RetryExecution;
 import com.google.common.base.Function;
 import com.google.common.base.Optional;
 import com.google.common.collect.Lists;
+import com.google.common.collect.Maps;
 import com.google.common.util.concurrent.AsyncFunction;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -297,7 +299,17 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
                      .firstKeyOf(NodeConnector.class).getId().getValue();
     }
 
+    private Map<Ipv4Address, Long> timestamps = Maps.newConcurrentMap();
+
     private ListenableFuture<Boolean> checkAndLearn(PacketReceived packet, ArpInfo info) {
+        Ipv4Address ip = getIpv4Address(info.srcIp);
+        long timestamp = System.currentTimeMillis();
+        long lastUpdate = timestamps.getOrDefault(ip, 0L);
+
+        if (timestamp - lastUpdate < GRACEFUL_PERIOD * 10) {
+            return Futures.immediateFuture(true);
+        }
+
         final ReadWriteTransaction rwtx = broker.newReadWriteTransaction();
         return Futures.transform(fromNeighbor(rwtx, packet), (Boolean fromNeighbor) -> {
             if (fromNeighbor) {
@@ -311,6 +323,7 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
             LOG.info("ARP packet from a potential host");
 
             learn(rwtx, packet, info);
+            timestamps.put(ip, lastUpdate);
 
             rwtx.submit();
             return true;
@@ -504,8 +517,12 @@ public class ArpProxy implements PacketProcessingListener, DataChangeListener, A
                 continue;
             }
 
-            updateTerminationPoint(tx, src.getSourceNode(), src.getSourceTp(), false);
-            updateTerminationPoint(tx, dst.getDestNode(), dst.getDestTp(), false);
+            if (isOpenflowSwitch(src.getSourceNode())) {
+                updateTerminationPoint(tx, src.getSourceNode(), src.getSourceTp(), false);
+            }
+            if (isOpenflowSwitch(dst.getDestNode())) {
+                updateTerminationPoint(tx, dst.getDestNode(), dst.getDestTp(), false);
+            }
         }
     }
 
