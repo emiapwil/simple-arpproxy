@@ -11,7 +11,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 import org.opendaylight.controller.md.sal.binding.api.DataBroker;
@@ -33,10 +33,6 @@ import org.opendaylight.yangtools.yang.binding.InstanceIdentifier;
 import com.google.common.collect.Sets;
 
 final class TopologyMonitor extends AbstractArpProxyComponents implements DataChangeListener {
-
-    private static final long GRACEFUL_PERIOD = 1000; // 1 second = 1000 milliseconds
-
-    private AtomicLong timestamp = new AtomicLong(0L);
 
     private DataBroker broker;
 
@@ -73,6 +69,10 @@ final class TopologyMonitor extends AbstractArpProxyComponents implements DataCh
         return new ExternalPortBuilder().setPortId(port).build();
     }
 
+    private Set<String> snapshot = Collections.emptySet();
+
+    private ReentrantLock lock = new ReentrantLock();
+
     public void refreshExternalPorts(Topology topology) {
         Set<String> ports = Sets.newHashSet();
 
@@ -95,6 +95,13 @@ final class TopologyMonitor extends AbstractArpProxyComponents implements DataCh
             }
         });
 
+        lock.lock();
+        if (!Sets.difference(snapshot, ports).isEmpty()) {
+            snapshot = ports;
+            return;
+        }
+        lock.unlock();
+
         List<ExternalPort> externalPorts = ports.stream()
                                                 .map(TopologyMonitor::createExternalPort)
                                                 .collect(Collectors.toList());
@@ -108,13 +115,6 @@ final class TopologyMonitor extends AbstractArpProxyComponents implements DataCh
 
     @Override
     public void onDataChanged(AsyncDataChangeEvent<InstanceIdentifier<?>, DataObject> event) {
-        long now = System.currentTimeMillis();
-        long timestamp = this.timestamp.getAndAccumulate(now, (x, y) -> {
-            return y - x > GRACEFUL_PERIOD ? y : x;
-        });
-        if (now - timestamp < GRACEFUL_PERIOD) {
-            return;
-        }
         if (event.getUpdatedSubtree() instanceof Topology) {
             CompletableFuture.supplyAsync(() -> {
                 refreshExternalPorts((Topology)event.getUpdatedSubtree());
